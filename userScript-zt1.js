@@ -3,9 +3,8 @@
  *
  * TizenTube downloads its userscript from jsDelivr at every start. In the patched TizenTube app that address points here instead.
  * This loader:
- *   1. runs the real TizenTube userscript (ad blocker, SponsorBlock ...) right away, before YouTube loads its first page: from a copy
- *      kept in the page's storage when there is one, else downloaded synchronously. A fresh copy is fetched in the background for the
- *      next start. (Loading it later let the first page of YouTube through with ads.)
+ *   1. runs the real TizenTube userscript (ad blocker, SponsorBlock ...): from a copy kept in the page's storage when there is one,
+ *      so it is in place before YouTube loads its first page, else downloaded first. A fresh copy is kept for the next start.
  *   2. loads the ZeussTV part from ZeussTV Pro on the same TV (127.0.0.1), which reports what is playing for Continue Watching.
  * YouTube's page enforces Trusted Types, so scripts are passed through a policy.
  */
@@ -30,27 +29,22 @@
   function run(code) { (0, eval)(policy ? policy.createScript(code) : code); }
   function store(t) { try { if (t && t.length > 10000) localStorage.setItem(CACHE, t); } catch (e) {} }
 
-  // 1. The real TizenTube script, at once.
-  var how = 'none';
+  // 1. The real TizenTube script: at once from the copy kept on the TV when there is one (so it is in place before YouTube loads
+  //    its first page), else downloaded (the way that is known to work on Cobalt) and kept for the next start.
+  //    Never both: a copy that ran is only refreshed in the background.
+  var ran = false;
   try {
     var cached = null;
     try { cached = localStorage.getItem(CACHE); } catch (e) {}
-    if (cached && cached.length > 10000) {
-      run(cached); how = 'cache';
-    } else {
-      var x = new XMLHttpRequest();
-      x.open('GET', ORIGINAL + '?v=' + Math.floor(Date.now() / 3600000), false); // synchronous on purpose
-      x.send();
-      if (x.status === 200 && x.responseText.length > 10000) { run(x.responseText); store(x.responseText); how = 'download'; }
-      else how = 'HTTP ' + x.status;
-    }
-  } catch (e) { how = 'failed: ' + e; }
-  post('/hello', { tizentube: how, policy: !!policy });
-
-  // Fresh copy for the next start.
-  setTimeout(function () {
-    fetch(ORIGINAL + '?v=' + Math.floor(Date.now() / 3600000)).then(function (r) { return r.ok ? r.text() : null; }).then(store).catch(function () {});
-  }, 20000);
+    if (cached && cached.length > 10000) { run(cached); ran = true; post('/hello', { tizentube: 'cache', policy: !!policy }); }
+  } catch (e) { ran = false; post('/hello', { tizentube: 'cache failed: ' + e, policy: !!policy }); }
+  fetch(ORIGINAL + '?v=' + Math.floor(Date.now() / 3600000))
+    .then(function (r) { return r.ok ? r.text() : Promise.reject('HTTP ' + r.status); })
+    .then(function (t) {
+      store(t);
+      if (!ran) { run(t); ran = true; post('/hello', { tizentube: 'download', policy: !!policy }); }
+    })
+    .catch(function (e) { if (!ran) post('/hello', { tizentube: 'failed: ' + e, policy: !!policy }); });
 
   // 2. The ZeussTV part from the ZeussTV app (retried: ZeussTV may start later than TizenTube).
   var tries = 0;
